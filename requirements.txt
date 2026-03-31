@@ -1,0 +1,8 @@
+streamlit
+groq
+openai
+google-generativeai
+supabase
+python-dotenv
+matplotlib
+fpdf2
