@@ -37,37 +37,30 @@ class IntelligenceRouter:
 
     @staticmethod
     def _call_groq(system_prompt: str, user_prompt: str) -> str:
-        keys = EnvManager.get_keys("GROQ")
-        
-        def make_call(key):
-            client = Groq(api_key=key)
-            response = client.chat.completions.create(
-                model="llama3-70b-8192",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.4,
-                max_tokens=2000
-            )
-            return response.choices[0].message.content
-            
-        return IntelligenceRouter._execute_with_rotation("Groq", keys, make_call)
+        client = Groq(api_key=EnvManager.get_groq_key())
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile", # ATUALIZADO: Modelo novo de 70B
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.4,
+            max_tokens=2000
+        )
+        return response.choices[0].message.content
 
     @staticmethod
     def _call_gemini(system_prompt: str, user_prompt: str) -> str:
-        keys = EnvManager.get_keys("GEMINI")
-        
-        def make_call(key):
-            genai.configure(api_key=key)
-            model = genai.GenerativeModel(model_name="gemini-1.5-flash", system_instruction=system_prompt)
-            response = model.generate_content(
-                user_prompt,
-                generation_config=genai.types.GenerationConfig(temperature=0.4, max_output_tokens=2000)
-            )
-            return response.text
-            
-        return IntelligenceRouter._execute_with_rotation("Gemini", keys, make_call)
+        genai.configure(api_key=EnvManager.get_gemini_key())
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash-latest", # ATUALIZADO: Rota segura
+            system_instruction=system_prompt
+        )
+        response = model.generate_content(
+            user_prompt,
+            generation_config=genai.types.GenerationConfig(temperature=0.4)
+        )
+        return response.text
 
     @staticmethod
     def _call_openrouter(system_prompt: str, user_prompt: str) -> str:
