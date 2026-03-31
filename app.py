@@ -1,5 +1,6 @@
 import streamlit as st
 import time
+import concurrent.futures
 from core.prompts import PromptEngineer
 from core.load_balancer import IntelligenceRouter
 from utils.pdf_engine import PDFBuilder
@@ -35,7 +36,7 @@ st.markdown("""
     footer {visibility: hidden;}    
     header {visibility: hidden;}    
 
-    /* Títulos e Branding - Sem cor fixa para respeitar o Dark/Light Mode nativo */
+    /* Títulos e Branding */
     .brand-header { text-align: center; font-size: 2.8em; font-weight: 800; letter-spacing: -1px; margin-bottom: 2rem; }
     .brand-footer { text-align: center; font-size: 0.85em; color: #888; margin-top: 4rem; font-weight: 400; border-top: 1px solid #444; padding-top: 1rem;}
     .laranja-cria { color: #E85D04; }
@@ -94,7 +95,6 @@ elif st.session_state.step == 2:
     st.markdown("Selecione qual será o **Kit de Comportamento** (a lente de mentalidade) que guiará a mesa de conselheiros.")
     st.markdown("<br>", unsafe_allow_html=True)
     
-    # Uso de Cards Nativos (Elimina o erro do removeChild)
     for kit_name, kit_desc in KITS.items():
         with st.container(border=True):
             st.markdown(f"#### {kit_name}")
@@ -115,7 +115,6 @@ elif st.session_state.step == 3:
     st.markdown(f"Kit selecionado: **{st.session_state.selected_kit}**. Agora, escolha a área de conhecimento que fundamentará a base de dados técnica do Conclave.")
     st.markdown("<br>", unsafe_allow_html=True)
     
-    # Uso de Cards Nativos
     for area_name, area_desc in AREAS.items():
         with st.container(border=True):
             st.markdown(f"#### {area_name}")
@@ -130,7 +129,7 @@ elif st.session_state.step == 3:
         st.session_state.step = 2
         st.rerun()
 
-# --- TELA 4: EXECUÇÃO DO MOTOR SECI ---
+# --- TELA 4: EXECUÇÃO DO MOTOR SECI COM MULTITHREADING ---
 elif st.session_state.step == 4:
     st.markdown("### Passo 3: O Dilema Central")
     st.markdown(f"**Parâmetros Ativos:** Tom _{st.session_state.selected_kit}_ | Área: _{st.session_state.selected_area}_")
@@ -151,23 +150,64 @@ elif st.session_state.step == 4:
         else:
             st.session_state.dossier = []
             history_context = f"DILEMA ORIGINAL: {user_dilemma}\n\n"
-            agents = [("FASE I: Estratégico", "estrategista"), ("FASE I: Humano", "humanista"), ("FASE I: Analítico", "analista"), ("FASE II: Inovador", "inovador"), ("FASE III: Antagonista", "antagonista"), ("FASE IV: Diplomata", "diplomata")]
+            
+            agents = [
+                ("FASE I: Estratégico", "estrategista"), 
+                ("FASE I: Humano", "humanista"), 
+                ("FASE I: Analítico", "analista"), 
+                ("FASE II: Inovador", "inovador"), 
+                ("FASE III: Antagonista", "antagonista"), 
+                ("FASE IV: Diplomata", "diplomata")
+            ]
 
             st.markdown("---")
             st.markdown("### Deliberação da Mesa")
 
-            # Execução Fases I a IV
-            for fase_nome, agent_id in agents:
-                with st.spinner(f"Processando {fase_nome}..."):
-                    prompt = PromptEngineer.build_prompt(st.session_state.selected_area, agent_id, KITS[st.session_state.selected_kit])
-                    resposta = IntelligenceRouter.execute_inference(prompt, history_context)
-                    history_context += f"\n\n--- {fase_nome} ({agent_id.upper()}) ---\n{resposta}"
-                    st.session_state.dossier.append({"fase": fase_nome, "role": agent_id, "texto": resposta})
-                    with st.expander(f" {fase_nome} | {agent_id.upper()}", expanded=False):
-                        st.markdown(resposta)
-                    time.sleep(1)
+            # Função isolada para rodar nas Threads
+            def process_agent(fase_nome, agent_id, area, kit, dilemma):
+                prompt = PromptEngineer.build_prompt(area, agent_id, KITS[kit])
+                context = f"DILEMA ORIGINAL: {dilemma}\n\n"
+                resposta = IntelligenceRouter.execute_inference(prompt, context)
+                return {"fase": fase_nome, "role": agent_id, "texto": resposta}
 
-            # Execução Fase V (Consenso)
+            resultados_agentes = []
+
+            # ---------------------------------------------------------
+            # MULTITHREADING + ACTIVE WAIT UX
+            # ---------------------------------------------------------
+            with st.status("Iniciando deliberação paralela dos conselheiros...", expanded=True) as status:
+                st.write("⏳ Conectando aos agentes especializados simultaneamente...")
+                
+                with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+                    futuros = {
+                        executor.submit(process_agent, f_nome, a_id, st.session_state.selected_area, st.session_state.selected_kit, user_dilemma): (f_nome, a_id)
+                        for f_nome, a_id in agents
+                    }
+                    
+                    for future in concurrent.futures.as_completed(futuros):
+                        f_nome, a_id = futuros[future]
+                        try:
+                            resultado = future.result()
+                            resultados_agentes.append(resultado)
+                            st.write(f"✅ O **{a_id.upper()}** concluiu a análise.")
+                        except Exception as e:
+                            st.write(f"❌ Ocorreu um gargalo com o **{a_id.upper()}**: {str(e)}")
+
+                status.update(label="Análise isolada concluída com sucesso!", state="complete", expanded=False)
+
+            # Reorganiza os resultados na ordem oficial das Fases para o PDF e para o Contexto
+            ordem_oficial = {a_id: i for i, (f_nome, a_id) in enumerate(agents)}
+            resultados_agentes.sort(key=lambda x: ordem_oficial[x['role']])
+
+            for res in resultados_agentes:
+                history_context += f"\n\n--- {res['fase']} ({res['role'].upper()}) ---\n{res['texto']}"
+                st.session_state.dossier.append(res)
+                with st.expander(f" {res['fase']} | {res['role'].upper()}", expanded=False):
+                    st.markdown(res['texto'])
+
+            # ---------------------------------------------------------
+            # EXECUÇÃO FASE V: CONSENSO 
+            # ---------------------------------------------------------
             with st.spinner("Sintetizando FASE V: Consenso..."):
                 prompt_consenso = "Faça um resumo executivo dos pontos de concordância e discordância da mesa."
                 resposta_consenso = IntelligenceRouter.execute_inference(prompt_consenso, history_context)
@@ -179,7 +219,9 @@ elif st.session_state.step == 4:
             st.markdown("---")
             st.markdown("### VEREDITO FINAL (FASE VI)")
             
-            # Execução Fase VI e Persistência
+            # ---------------------------------------------------------
+            # EXECUÇÃO FASE VI E PERSISTÊNCIA
+            # ---------------------------------------------------------
             with st.spinner("Compilando Plano Executivo e Canvas..."):
                 prompt_decisor = PromptEngineer.build_prompt(st.session_state.selected_area, "decisor", KITS[st.session_state.selected_kit])
                 verdict_text = IntelligenceRouter.execute_inference(prompt_decisor, history_context, "deep")
@@ -188,7 +230,9 @@ elif st.session_state.step == 4:
                 
                 SupabaseManager.save_deliberation(st.session_state.selected_area, user_dilemma, verdict_text, st.session_state.selected_kit)
 
-            # Geração do Dossiê PDF
+            # ---------------------------------------------------------
+            # GERAÇÃO DO DOSSIÊ PDF
+            # ---------------------------------------------------------
             with st.spinner("Gerando Dossiê Executivo (PDF)..."):
                 caminho_pdf = PDFBuilder.generate_pdf(
                     area=st.session_state.selected_area, dilemma=user_dilemma,
